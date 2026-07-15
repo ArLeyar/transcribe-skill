@@ -64,12 +64,38 @@ for DEST in "${TARGETS[@]}"; do
   say "Installed: $DEST"
 done
 
+# --- optional: build the Russian fine-tune (much better on Russian speech) ---
+RU_DIR="$HOME/.cache/whisper-models/whisper-large-v3-russian-mlx"
+ANY_SCRIPT="$(dirname "${TARGETS[0]}")/transcribe/scripts/convert.py"
+[ -f "$ANY_SCRIPT" ] || ANY_SCRIPT="$SRC/scripts/convert.py"
+
+build_ru_model() {
+  say "Building the Russian model (downloads ~3GB, takes a while)..."
+  uv run --quiet --with mlx-whisper --with torch --with numpy --with tqdm --with huggingface_hub \
+    python3 "$ANY_SCRIPT" \
+      --torch-name-or-path antony66/whisper-large-v3-russian \
+      --mlx-path "$RU_DIR" || { echo "Conversion failed. The skill still works on the default model."; return 1; }
+  # mlx_whisper looks for weights.safetensors; the converter emits model.safetensors
+  [ -f "$RU_DIR/model.safetensors" ] && mv "$RU_DIR/model.safetensors" "$RU_DIR/weights.safetensors"
+  [ -f "$RU_DIR/weights.safetensors" ] && say "Russian model ready: $RU_DIR"
+}
+
+if [ -f "$RU_DIR/weights.safetensors" ]; then
+  say "Russian model already present, skipping"
+elif [ "${1:-}" = "--ru-model" ]; then
+  build_ru_model
+elif [ -r /dev/tty ]; then
+  printf '\nBuild the Russian fine-tune? Noticeably better on Russian speech,\nbut downloads ~3GB and takes a while. You can always do it later. [y/N] '
+  read -r ans < /dev/tty || ans="n"
+  case "$ans" in [yYдД]*) build_ru_model ;; *) say "Skipped. Using the default model." ;; esac
+fi
+
 cat <<'EOF'
 
 Done. Restart Codex (or Claude Code) and tell it:
 
     transcribe /path/to/file.m4a
 
-The first run downloads the model (~1.6GB). One time only, then it works offline.
+The first run downloads the model. One time only, then it works offline.
 Drag an audio file into the chat window to get its path.
 EOF

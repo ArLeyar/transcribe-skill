@@ -54,13 +54,22 @@ Transcription runs roughly 5-10x faster than the recording's length.
 
 ### Better Russian accuracy
 
-By default the skill uses the general `whisper-large-v3-turbo`. There is a Russian fine-tune,
-[antony66/whisper-large-v3-russian](https://huggingface.co/antony66/whisper-large-v3-russian)
-(WER 6.39 vs ~9.8 for the base model), but no MLX build of it exists, so you have to convert it
-yourself. It downloads ~6GB and will be tight on 16GB of RAM:
+The installer offers to build this for you — say `y` when it asks. This section is only for
+doing it later.
+
+By default the skill uses the general `whisper-large-v3-turbo`. For Russian there is a much
+better fine-tune, [antony66/whisper-large-v3-russian](https://huggingface.co/antony66/whisper-large-v3-russian)
+(WER 6.39 vs ~9.8 for the base model). No MLX build of it is published, so it gets converted
+locally — a ~3GB download, no token needed, one time:
 
 ```bash
-uv run --with mlx-whisper --with torch --with transformers --with numpy \
+bash install.sh --ru-model
+```
+
+Or by hand, if you don't have the repo checked out:
+
+```bash
+uv run --with mlx-whisper --with torch --with numpy --with tqdm --with huggingface_hub \
   python3 ~/.codex/skills/transcribe/scripts/convert.py \
   --torch-name-or-path antony66/whisper-large-v3-russian \
   --mlx-path ~/.cache/whisper-models/whisper-large-v3-russian-mlx
@@ -68,7 +77,8 @@ mv ~/.cache/whisper-models/whisper-large-v3-russian-mlx/model.safetensors \
    ~/.cache/whisper-models/whisper-large-v3-russian-mlx/weights.safetensors
 ```
 
-The script picks that directory up automatically for Russian once it exists.
+The script picks that directory up automatically for Russian once it exists. Measured on real
+noisy speech, the fine-tune keeps punctuation and profanity that `turbo` drops entirely.
 
 ### Speaker diarization
 

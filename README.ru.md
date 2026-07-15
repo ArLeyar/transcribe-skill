@@ -52,13 +52,22 @@ curl -fsSL https://raw.githubusercontent.com/ArLeyar/transcribe-skill/main/insta
 
 ## Необязательное
 
-**Точнее по-русски.** По умолчанию используется универсальная модель. Есть русский файн-тюн
+**Точнее по-русски.** Установщик сам предложит это собрать, ответь `y`. Этот раздел нужен,
+только если решишь сделать позже.
+
+По умолчанию работает универсальная модель. Для русского есть заметно более точный файн-тюн
 ([antony66/whisper-large-v3-russian](https://huggingface.co/antony66/whisper-large-v3-russian),
-ошибок примерно в полтора раза меньше), но готовой MLX-сборки нет, её надо собрать локально —
-скачает ~6 ГБ и на 16 ГБ памяти будет впритык:
+ошибок примерно в полтора раза меньше). Готовой MLX-сборки не выложено, поэтому она собирается
+у тебя на месте: скачает ~3 ГБ, токен не нужен, делается один раз.
 
 ```bash
-uv run --with mlx-whisper --with torch --with transformers --with numpy \
+bash install.sh --ru-model
+```
+
+Если репозиторий не скачан, то же самое вручную:
+
+```bash
+uv run --with mlx-whisper --with torch --with numpy --with tqdm --with huggingface_hub \
   python3 ~/.codex/skills/transcribe/scripts/convert.py \
   --torch-name-or-path antony66/whisper-large-v3-russian \
   --mlx-path ~/.cache/whisper-models/whisper-large-v3-russian-mlx
@@ -66,7 +75,8 @@ mv ~/.cache/whisper-models/whisper-large-v3-russian-mlx/model.safetensors \
    ~/.cache/whisper-models/whisper-large-v3-russian-mlx/weights.safetensors
 ```
 
-Скрипт сам подхватит эту папку для русского языка, если она есть.
+Скрипт сам подхватит эту папку для русского языка, если она есть. На проверке с реальной
+шумной речью файн-тюн сохраняет пунктуацию и мат, которые универсальная модель теряет.
 
 **Разделение по говорящим (диаризация).** Нужен бесплатный токен HuggingFace:
 
