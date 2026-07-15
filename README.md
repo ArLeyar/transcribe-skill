@@ -1,59 +1,63 @@
-# transcribe — расшифровка аудио в текст
+# transcribe — audio to text, locally
 
-Скилл для Codex и Claude Code. Превращает аудио- и видеозаписи в текст прямо на твоём Маке:
-без интернета, бесплатно, запись никуда не уходит. Заточен под русскую речь с айтишным сленгом.
+*[Русская версия](README.ru.md)*
 
-Умеет:
+A skill for **Codex** and **Claude Code** that turns audio and video recordings into text
+right on your Mac: offline, free, and nothing ever leaves your machine. Tuned for Russian
+speech with English tech jargon mixed in, but works with any language Whisper supports.
 
-- расшифровать любой файл: `.m4a`, `.mp3`, `.wav`, `.caf`, `.ogg`, `.flac`, а также видео `.mp4`, `.mov`, `.webm`, `.mkv`
-- записать с микрофона и сразу расшифровать
-- разделить реплики по говорящим («кто что сказал») в диалогах
-- переварить длинную запись целиком: она сама режется на куски по паузам
-- вычистить типичные глюки whisper на тишине (зацикленные повторы)
+What it does:
 
-## Что нужно
+- transcribes any file: `.m4a`, `.mp3`, `.wav`, `.caf`, `.ogg`, `.flac`, and video too (`.mp4`, `.mov`, `.webm`, `.mkv`)
+- records from the microphone and transcribes on the spot
+- separates speakers in a conversation (who said what)
+- handles hour-long recordings: they are split on silence automatically
+- cleans up Whisper's classic hallucination loops on silent stretches
 
-- Мак на Apple Silicon (M1 и новее), 16 ГБ памяти хватает
-- Codex или Claude Code
-- Homebrew — если его нет, поставь с [brew.sh](https://brew.sh), это одна команда с их сайта
+## Requirements
 
-Остальное (ffmpeg, uv, модель) установщик подтянет сам.
+- Apple Silicon Mac (M1 or newer), 16GB RAM is plenty
+- Codex or Claude Code
+- Homebrew — if you don't have it, grab it at [brew.sh](https://brew.sh)
 
-## Установка
+The installer pulls in the rest (ffmpeg, uv, the model) by itself.
 
-Открой Терминал (Cmd+Space → «Терминал») и вставь одну строку:
+## Install
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ArLeyar/transcribe-skill/main/install.sh | bash
 ```
 
-Установщик найдёт Codex и/или Claude Code и положит скилл туда, куда нужно. Затем перезапусти Codex.
+The installer detects Codex and/or Claude Code and drops the skill where each of them looks
+for it. Restart Codex afterwards.
 
-## Как пользоваться
+## Usage
 
-Перетащи аудиофайл в окно чата (так подставится путь к нему) и напиши:
+Drag an audio file into the chat window (that pastes its path) and say:
 
 ```
-расшифруй /Users/имя/Downloads/запись.m4a
+transcribe /Users/you/Downloads/recording.m4a
 ```
 
-Дальше словами, скилл сам подберёт режим:
+From there just use plain language — the skill picks the right mode:
 
-- `расшифруй запись.m4a и сохрани в текстовый файл`
-- `тут два человека говорят, раздели по спикерам` — режим диаризации
-- `эта запись на английском` — другой язык
-- `запиши с микрофона 30 секунд и расшифруй`
-- `запись шумная, с улицы` — включит шумодав
+- `transcribe recording.m4a and save it to a file`
+- `there are two people talking, split it by speaker` — diarization
+- `this one is in English` — another language
+- `record 30 seconds from the mic and transcribe it`
+- `the recording is noisy, it's from the street` — turns on denoising
 
-Первый запуск скачает модель (~1.6 ГБ) — один раз, потом всё работает офлайн.
-Расшифровка идёт примерно в 5-10 раз быстрее длительности записи.
+The first run downloads the model (~1.6GB). One time only; after that it works offline.
+Transcription runs roughly 5-10x faster than the recording's length.
 
-## Необязательное
+## Optional extras
 
-**Точнее по-русски.** По умолчанию используется универсальная модель. Есть русский файн-тюн
-([antony66/whisper-large-v3-russian](https://huggingface.co/antony66/whisper-large-v3-russian),
-ошибок примерно в полтора раза меньше), но готовой MLX-сборки нет, её надо собрать локально —
-скачает ~6 ГБ и на 16 ГБ памяти будет впритык:
+### Better Russian accuracy
+
+By default the skill uses the general `whisper-large-v3-turbo`. There is a Russian fine-tune,
+[antony66/whisper-large-v3-russian](https://huggingface.co/antony66/whisper-large-v3-russian)
+(WER 6.39 vs ~9.8 for the base model), but no MLX build of it exists, so you have to convert it
+yourself. It downloads ~6GB and will be tight on 16GB of RAM:
 
 ```bash
 uv run --with mlx-whisper --with torch --with transformers --with numpy \
@@ -64,31 +68,40 @@ mv ~/.cache/whisper-models/whisper-large-v3-russian-mlx/model.safetensors \
    ~/.cache/whisper-models/whisper-large-v3-russian-mlx/weights.safetensors
 ```
 
-Скрипт сам подхватит эту папку для русского языка, если она есть.
+The script picks that directory up automatically for Russian once it exists.
 
-**Разделение по говорящим (диаризация).** Нужен бесплатный токен HuggingFace:
+### Speaker diarization
 
-1. Зарегистрируйся на [huggingface.co](https://huggingface.co)
-2. Прими условия на страницах [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) и [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0)
-3. Создай токен в [настройках](https://huggingface.co/settings/tokens)
-4. Положи его в файл `~/.env` строкой: `HF_TOKEN=hf_твой_токен`
+Needs a free HuggingFace token:
 
-Без токена разделение по спикерам просто не включится, обычная расшифровка продолжит работать.
+1. Sign up at [huggingface.co](https://huggingface.co)
+2. Accept the terms on [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) and [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0)
+3. Create a token in [settings](https://huggingface.co/settings/tokens)
+4. Put it in `~/.env` as: `HF_TOKEN=hf_your_token`
 
-**Облачный движок OpenAI.** Быстрее на длинных записях, но запись уходит на сервер и стоит
-денег ($0.003/мин). Положи `OPENAI_API_KEY=sk-...` в `~/.env` и скажи «расшифруй через openai».
+Without a token diarization simply stays off and plain transcription keeps working.
 
-## Обновление
+### OpenAI cloud engine
 
-Запусти команду установки ещё раз, она перезапишет скилл свежей версией.
+Faster on long files, but the audio leaves your machine and it costs money ($0.003/min).
+Put `OPENAI_API_KEY=sk-...` in `~/.env` and ask for "transcribe with openai".
 
-## Если сломалось
+## Updating
 
-- `command not found: uv` — закрой и открой Терминал заново, запусти установку ещё раз
+Run the install command again — it overwrites the skill with the current version.
+
+## Troubleshooting
+
+- `command not found: uv` — close and reopen your terminal, then run the installer again
 - `ffmpeg not found` — `brew install ffmpeg`
-- Codex не видит скилл — перезапусти приложение; проверь, что папка `~/.codex/skills/transcribe` на месте
-- Текст зациклился на повторах — попроси «перезапусти с моделью turbo»
+- Codex doesn't see the skill — restart the app; check that `~/.codex/skills/transcribe` exists
+- Text loops on repeated words — ask to "re-run with the turbo model"
 
-## Лицензия
+## Notes
+
+Local engines are Apple Silicon only — they run on [MLX](https://github.com/ml-explore/mlx),
+Apple's array framework. The installer refuses to pretend otherwise on other hardware.
+
+## License
 
 MIT.

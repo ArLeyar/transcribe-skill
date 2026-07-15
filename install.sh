@@ -6,43 +6,43 @@ set -euo pipefail
 
 REPO_URL="https://github.com/ArLeyar/transcribe-skill.git"
 say() { printf '\033[1;32m==>\033[0m %s\n' "$1"; }
-die() { printf '\033[1;31mОшибка:\033[0m %s\n' "$1" >&2; exit 1; }
+die() { printf '\033[1;31mError:\033[0m %s\n' "$1" >&2; exit 1; }
 
 # --- source: local checkout if SKILL.md is next to this script, else clone ---
 SRC=""
 if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "$(dirname "${BASH_SOURCE[0]}")/SKILL.md" ]; then
   SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 else
-  command -v git >/dev/null || die "нужен git. Поставь Xcode Command Line Tools: xcode-select --install"
+  command -v git >/dev/null || die "git is required. Install the Xcode Command Line Tools: xcode-select --install"
   SRC="$(mktemp -d)/transcribe-skill"
-  say "Скачиваю скилл..."
+  say "Downloading the skill..."
   git clone --depth 1 --quiet "$REPO_URL" "$SRC"
 fi
 
 # --- platform ---
-[ "$(uname -s)" = "Darwin" ] || die "нужен macOS (локальный движок работает только на Apple Silicon)."
+[ "$(uname -s)" = "Darwin" ] || die "macOS is required (the local engine only runs on Apple Silicon)."
 if [ "$(uname -m)" != "arm64" ]; then
-  echo "ВНИМАНИЕ: это не Apple Silicon. Локальный движок не заведётся, останется только -e openai."
+  echo "WARNING: not Apple Silicon. The local engine will not run; only -e openai will work."
 fi
 
 # --- ffmpeg (mandatory, all engines) ---
 if command -v ffmpeg >/dev/null; then
-  say "ffmpeg уже есть"
+  say "ffmpeg already installed"
 else
-  command -v brew >/dev/null || die "нет Homebrew. Открой https://brew.sh, поставь его, потом запусти установку снова."
-  say "Ставлю ffmpeg (пару минут)..."
+  command -v brew >/dev/null || die "Homebrew not found. Install it from https://brew.sh, then run this installer again."
+  say "Installing ffmpeg (takes a couple of minutes)..."
   brew install ffmpeg
 fi
 
 # --- uv (runs the script + its python deps) ---
 if command -v uv >/dev/null; then
-  say "uv уже есть"
+  say "uv already installed"
 else
-  say "Ставлю uv..."
+  say "Installing uv..."
   curl -LsSf https://astral.sh/uv/install.sh | sh
   export PATH="$HOME/.local/bin:$PATH"
 fi
-command -v uv >/dev/null || die "uv поставился, но не виден. Закрой и открой терминал, запусти установку снова."
+command -v uv >/dev/null || die "uv installed but is not on PATH. Close and reopen your terminal, then run this again."
 
 # --- targets: every agent host that exists; default to Codex ---
 TARGETS=()
@@ -53,7 +53,7 @@ TARGETS=()
 for DEST in "${TARGETS[@]}"; do
   # Never blow away a skills dir that some git repo manages (dotfiles setups symlink it).
   if git -C "$(dirname "$DEST")" rev-parse --show-toplevel >/dev/null 2>&1; then
-    echo "ПРОПУСК: $DEST лежит внутри git-репозитория — не трогаю. Поставь вручную, если надо."
+    echo "SKIPPED: $DEST lives inside a git repo, leaving it alone. Install manually if you need to."
     continue
   fi
   rm -rf "$DEST"
@@ -61,15 +61,15 @@ for DEST in "${TARGETS[@]}"; do
   cp "$SRC"/scripts/*.py "$DEST/scripts/"
   # SKILL.md ships with a placeholder because the install path differs per host
   sed "s|__SKILL_DIR__|$DEST|g" "$SRC/SKILL.md" > "$DEST/SKILL.md"
-  say "Установлено: $DEST"
+  say "Installed: $DEST"
 done
 
 cat <<'EOF'
 
-Готово. Перезапусти Codex (или Claude Code) и скажи ему:
+Done. Restart Codex (or Claude Code) and tell it:
 
-    расшифруй /путь/к/файлу.m4a
+    transcribe /path/to/file.m4a
 
-Первый запуск качает модель (~1.6 ГБ) — это один раз, дальше работает офлайн.
-Просто перетащи аудиофайл в окно чата, чтобы получить его путь.
+The first run downloads the model (~1.6GB). One time only, then it works offline.
+Drag an audio file into the chat window to get its path.
 EOF
