@@ -3,7 +3,7 @@ name: transcribe
 description: Transcribe audio from file or microphone. Russian + IT slang optimized. Auto-chunks long files. Local MLX whisper (default, offline, free), OpenAI gpt-4o-mini-transcribe, or local speaker diarization. Use when user asks to transcribe, convert speech to text, or record and transcribe audio. ALSO auto-activate (no "transcribe" word needed) whenever the user sends, pastes, or links a path/URL to an audio file — .m4a (most common), .mp3, .wav, .caf, .ogg, .flac — or a video file (.mp4, .mov, .webm, .mkv); a bare audio path/link means "transcribe this".
 allowed-tools: Read, Bash, Glob
 user_invocable: true
-version: 1.1.0
+version: 1.2.0
 ---
 
 # Audio Transcription
@@ -238,3 +238,15 @@ mp3 for speed/upload size. Large uncompressed files are re-encoded before proces
   from HuggingFace on first run and cached in `~/.cache/huggingface/`.
 - **OpenAI engine**: `OPENAI_API_KEY` in `~/.env` (or exported in the shell)
 - **Diarize**: `HF_TOKEN` in `~/.env` (or exported in the shell), accept pyannote terms on huggingface.co
+
+## Updating this skill
+
+If the user asks to update/upgrade the transcribe skill, run the installer — it pulls the
+latest version and reinstalls in place, reporting `Updating vX -> vY` or `Already on the
+latest version`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ArLeyar/transcribe-skill/main/install.sh | bash
+```
+
+Tell the user to restart Codex / Claude Code afterwards so the new skill is loaded.

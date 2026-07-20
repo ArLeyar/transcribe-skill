@@ -96,7 +96,18 @@ Put `OPENAI_API_KEY=sk-...` in `~/.env` (or export it in your shell) and ask for
 
 ## Updating
 
-Run the install command again — it overwrites the skill with the current version.
+Run the same install command again:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ArLeyar/transcribe-skill/main/install.sh | bash
+```
+
+It pulls the latest version, reports `Updating vX -> vY` (or `Already on the latest version`),
+and reinstalls in place. Existing tools (ffmpeg, uv) and the Russian model are left alone, so
+an update is quick. Restart Codex / Claude Code afterwards to pick up the new skill.
+
+Inside a Codex or Claude Code session you can also just ask: "update the transcribe skill" —
+the agent runs the same install command for you.
 
 ## Troubleshooting
 

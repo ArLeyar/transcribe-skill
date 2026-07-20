@@ -50,18 +50,28 @@ TARGETS=()
 [ -d "$HOME/.claude" ] && TARGETS+=("$HOME/.claude/skills/transcribe")
 [ ${#TARGETS[@]} -eq 0 ] && TARGETS=("$HOME/.codex/skills/transcribe")
 
+NEW_VER="$(sed -n 's/^version: //p' "$SRC/SKILL.md")"
+
 for DEST in "${TARGETS[@]}"; do
   # Never blow away a skills dir that some git repo manages (dotfiles setups symlink it).
   if git -C "$(dirname "$DEST")" rev-parse --show-toplevel >/dev/null 2>&1; then
     echo "SKIPPED: $DEST lives inside a git repo, leaving it alone. Install manually if you need to."
     continue
   fi
+  # Re-running is how you update: report old -> new (or "already latest") before overwriting.
+  OLD_VER="$(sed -n 's/^version: //p' "$DEST/SKILL.md" 2>/dev/null)"
+  if [ -z "$OLD_VER" ]; then
+    say "Installing transcribe v$NEW_VER -> $DEST"
+  elif [ "$OLD_VER" = "$NEW_VER" ]; then
+    say "Already on the latest version (v$NEW_VER) -> $DEST"
+  else
+    say "Updating transcribe v$OLD_VER -> v$NEW_VER -> $DEST"
+  fi
   rm -rf "$DEST"
   mkdir -p "$DEST/scripts"
   cp "$SRC/scripts/transcribe.py" "$SRC/scripts/convert.py" "$DEST/scripts/"
   # SKILL.md ships with a placeholder because the install path differs per host
   sed "s|__SKILL_DIR__|$DEST|g" "$SRC/SKILL.md" > "$DEST/SKILL.md"
-  say "Installed: $DEST (v$(sed -n 's/^version: //p' "$SRC/SKILL.md"))"
 done
 
 # --- optional: build the Russian fine-tune (much better on Russian speech) ---
