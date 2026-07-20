@@ -11,6 +11,12 @@ Transcribe audio files or record from microphone. Optimized for Russian with IT 
 Default is **fully local** (offline, free) using Whisper on Apple Silicon.
 Auto-splits long files into chunks so long recordings just work.
 
+> **ALWAYS run transcription in the background / a parallel agent — never block the main thread.**
+> Model load + chunking + diarization take minutes (and silero-vad/pyannote download on first
+> run). Launch every `transcribe.py` invocation in the background (e.g. Bash with
+> `run_in_background: true`, or a parallel sub-agent), tell the user what was launched, keep
+> working, and read the output file when it completes. Do NOT wait on it inline.
+
 **Video files work directly** (`.webm`, `.mp4`, `.mov`, `.mkv`, ...) — the audio track is
 ffmpeg-extracted automatically. Feed the recording as-is, no manual audio extraction needed.
 
@@ -18,27 +24,30 @@ ffmpeg-extracted automatically. Feed the recording as-is, no manual audio extrac
 
 ## Quick Reference
 
+Dependencies are declared inside the script (PEP 723), so **`uv run` installs everything
+automatically on first run** — no `--with` flags needed. Always launch it in the
+background / a parallel agent (see note above).
+
 ### Transcribe a file (local, default — offline, free)
 
 ```bash
-uv run --with mlx-whisper --with silero-vad --with torch --with numpy \
-  python3 __SKILL_DIR__/scripts/transcribe.py <file>
+uv run __SKILL_DIR__/scripts/transcribe.py <file>
 ```
 
-`silero-vad` is what enables VAD chunking (cut on silence, less hallucination). Without it
-the script still runs — it just falls back to fixed-time 5-min chunks and prints a note.
+VAD chunking (cut on silence, less hallucination) is on by default; falls back to fixed-time
+5-min chunks only if VAD genuinely fails at runtime.
 
 ### Transcribe + save to markdown
 
 ```bash
-uv run --with mlx-whisper python3 __SKILL_DIR__/scripts/transcribe.py <file> -o transcript.md
+uv run __SKILL_DIR__/scripts/transcribe.py <file> -o transcript.md
 ```
 
 ### English (or other language)
 
 ```bash
 # uses general turbo model automatically for non-Russian
-uv run --with mlx-whisper python3 __SKILL_DIR__/scripts/transcribe.py <file> -l en
+uv run __SKILL_DIR__/scripts/transcribe.py <file> -l en
 ```
 
 ### Mixed-language audio — keep only one language
@@ -47,8 +56,7 @@ uv run --with mlx-whisper python3 __SKILL_DIR__/scripts/transcribe.py <file> -l 
 # per-chunk language auto-detect; keeps ONLY chunks in the target language.
 # For recordings that mix languages ("give me just the Spanish"). Forces the
 # multilingual turbo model + small (~30s) chunks. Local engine only.
-uv run --with mlx-whisper --with silero-vad --with torch --with numpy \
-  python3 __SKILL_DIR__/scripts/transcribe.py <file> --only es
+uv run __SKILL_DIR__/scripts/transcribe.py <file> --only es
 ```
 
 Whisper detects one language per chunk, so a chunk mixing two languages is kept or
@@ -59,8 +67,7 @@ the output and delete those. Prints `Language filter 'es': kept N, dropped M`.
 ### Speaker diarization — who said what (fully local, best quality)
 
 ```bash
-uv run --with mlx-whisper --with "pyannote.audio" --with torch --with silero-vad --with numpy \
-  python3 __SKILL_DIR__/scripts/transcribe.py -e diarize -s 2 <file>
+uv run __SKILL_DIR__/scripts/transcribe.py -e diarize -s 2 <file>
 ```
 
 `HF_TOKEN` is read from `~/.env` automatically (the script loads it; no need to export it).
@@ -76,7 +83,7 @@ banner at the top of the output (use `--no-fallback` to hard-fail instead).
 ### OpenAI cloud (audio leaves machine, costs money)
 
 ```bash
-uv run --with openai python3 __SKILL_DIR__/scripts/transcribe.py -e openai <file>
+uv run __SKILL_DIR__/scripts/transcribe.py -e openai <file>
 ```
 
 ### Jargon-heavy audio — bias toward domain vocabulary
@@ -84,28 +91,22 @@ uv run --with openai python3 __SKILL_DIR__/scripts/transcribe.py -e openai <file
 ```bash
 # initial prompt nudges the model toward your terms/names. Use ONLY for jargon-heavy audio.
 # Do NOT use for general/personal talk — it would force wrong vocab.
-uv run --with mlx-whisper python3 __SKILL_DIR__/scripts/transcribe.py <file> \
+uv run __SKILL_DIR__/scripts/transcribe.py <file> \
   -p "Kubernetes, gRPC, Rust, Go, Postgres"
 ```
 
 ### Record from mic + transcribe
 
 ```bash
-# Record 30 seconds
-uv run --with mlx-whisper --with sounddevice --with soundfile --with numpy \
-  python3 __SKILL_DIR__/scripts/transcribe.py -r 30
-
-# Record until Ctrl+C
-uv run --with mlx-whisper --with sounddevice --with soundfile --with numpy \
-  python3 __SKILL_DIR__/scripts/transcribe.py -r
+uv run __SKILL_DIR__/scripts/transcribe.py -r 30   # 30 seconds
+uv run __SKILL_DIR__/scripts/transcribe.py -r      # until Ctrl+C
 ```
 
 ### Noisy / roadside audio
 
 ```bash
 # conservative high/low-pass + afftdn denoise. Only when there's real background noise.
-uv run --with mlx-whisper --with silero-vad --with torch --with numpy \
-  python3 __SKILL_DIR__/scripts/transcribe.py --denoise <file>
+uv run __SKILL_DIR__/scripts/transcribe.py --denoise <file>
 ```
 
 ### Merge fragments recorded back-to-back
@@ -113,8 +114,7 @@ uv run --with mlx-whisper --with silero-vad --with torch --with numpy \
 ```bash
 # group files recorded close together (gap < --merge-gap, default 300s) into one session.
 # Time source: creation_time tag -> filesystem birthtime -> mtime.
-uv run --with mlx-whisper --with "pyannote.audio" --with torch --with silero-vad --with numpy \
-  python3 __SKILL_DIR__/scripts/transcribe.py --merge -e diarize -s 2 frag1.m4a frag2.m4a frag3.m4a
+uv run __SKILL_DIR__/scripts/transcribe.py --merge -e diarize -s 2 frag1.m4a frag2.m4a frag3.m4a
 ```
 
 Each session is saved as `<first-fragment>.merged.md`. Multiple files WITHOUT `--merge` are
@@ -218,7 +218,8 @@ heavily anyway, re-run with `-m mlx-community/whisper-large-v3-turbo`.
 
 Long files are chunked automatically:
 - **local / diarize**: VAD chunks (cut on silence) via `silero-vad`, lossless 16k mono WAV.
-  Falls back to fixed-time 5-min chunks if `silero-vad`/`torch` is missing or VAD fails.
+  Falls back to fixed-time 5-min chunks only if VAD fails at runtime (deps are bundled via
+  PEP 723, so a missing-module fallback shouldn't happen).
 - **openai**: fixed 5-min chunks (32k mono mp3 for upload limit), transcribed in parallel
   (up to 5 concurrent), merged into one output.
 
@@ -228,8 +229,9 @@ mp3 for speed/upload size. Large uncompressed files are re-encoded before proces
 
 ## Requirements
 
-- **ffmpeg**: `brew install ffmpeg` (required for all engines)
-- **uv**: runs the script and its dependencies (no manual pip install needed)
+- **Python deps**: bundled in the script via PEP 723 — `uv run` installs them on first run
+  (mlx-whisper, silero-vad, torch, numpy, soundfile, sounddevice, pyannote.audio, openai).
+- **ffmpeg**: `brew install ffmpeg` (required for all engines; not a pip package)
 - **Local engines**: Apple Silicon Mac (M1+), 16GB RAM is enough. Models are downloaded
   from HuggingFace on first run and cached in `~/.cache/huggingface/`.
 - **OpenAI engine**: `OPENAI_API_KEY` in `~/.env`

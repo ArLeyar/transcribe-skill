@@ -1,5 +1,22 @@
 #!/usr/bin/env python3
-"""Audio transcription: OpenAI API or local MLX models. Auto-chunks long files."""
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#     "mlx-whisper",
+#     "silero-vad",
+#     "torch",
+#     "numpy",
+#     "soundfile",
+#     "sounddevice",
+#     "pyannote.audio",
+#     "openai",
+# ]
+# ///
+"""Audio transcription: OpenAI API or local MLX models. Auto-chunks long files.
+
+Run with `uv run <this script> <file>` — PEP 723 metadata above makes uv install every
+dependency automatically (first run only, then cached). No `--with` flags needed; VAD,
+diarization, and recording all work out of the box."""
 
 import argparse
 import os
