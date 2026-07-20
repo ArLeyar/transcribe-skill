@@ -1,7 +1,5 @@
 # transcribe — audio to text, locally
 
-*[Русская версия](README.ru.md)*
-
 A skill for **Codex** and **Claude Code** that turns audio and video recordings into text
 right on your Mac: offline, free, and nothing ever leaves your machine. Tuned for Russian
 speech with English tech jargon mixed in, but works with any language Whisper supports.
@@ -69,8 +67,7 @@ bash install.sh --ru-model
 Or by hand, if you don't have the repo checked out:
 
 ```bash
-uv run --with mlx-whisper --with torch --with numpy --with tqdm --with huggingface_hub \
-  python3 ~/.codex/skills/transcribe/scripts/convert.py \
+uv run ~/.codex/skills/transcribe/scripts/convert.py \
   --torch-name-or-path antony66/whisper-large-v3-russian \
   --mlx-path ~/.cache/whisper-models/whisper-large-v3-russian-mlx
 mv ~/.cache/whisper-models/whisper-large-v3-russian-mlx/model.safetensors \
@@ -87,14 +84,15 @@ Needs a free HuggingFace token:
 1. Sign up at [huggingface.co](https://huggingface.co)
 2. Accept the terms on [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) and [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0)
 3. Create a token in [settings](https://huggingface.co/settings/tokens)
-4. Put it in `~/.env` as: `HF_TOKEN=hf_your_token`
+4. Put it in `~/.env` as: `HF_TOKEN=hf_your_token` (a token exported in your shell works too)
 
 Without a token diarization simply stays off and plain transcription keeps working.
 
 ### OpenAI cloud engine
 
 Faster on long files, but the audio leaves your machine and it costs money ($0.003/min).
-Put `OPENAI_API_KEY=sk-...` in `~/.env` and ask for "transcribe with openai".
+Put `OPENAI_API_KEY=sk-...` in `~/.env` (or export it in your shell) and ask for
+"transcribe with openai".
 
 ## Updating
 

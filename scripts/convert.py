@@ -1,4 +1,14 @@
 # Copyright © 2023-2024 Apple Inc.
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#     "mlx-whisper",
+#     "torch",
+#     "numpy",
+#     "tqdm",
+#     "huggingface_hub",
+# ]
+# ///
 
 import argparse
 import copy

@@ -58,10 +58,10 @@ for DEST in "${TARGETS[@]}"; do
   fi
   rm -rf "$DEST"
   mkdir -p "$DEST/scripts"
-  cp "$SRC"/scripts/*.py "$DEST/scripts/"
+  cp "$SRC/scripts/transcribe.py" "$SRC/scripts/convert.py" "$DEST/scripts/"
   # SKILL.md ships with a placeholder because the install path differs per host
   sed "s|__SKILL_DIR__|$DEST|g" "$SRC/SKILL.md" > "$DEST/SKILL.md"
-  say "Installed: $DEST"
+  say "Installed: $DEST (v$(sed -n 's/^version: //p' "$SRC/SKILL.md"))"
 done
 
 # --- optional: build the Russian fine-tune (much better on Russian speech) ---
@@ -71,8 +71,7 @@ ANY_SCRIPT="$(dirname "${TARGETS[0]}")/transcribe/scripts/convert.py"
 
 build_ru_model() {
   say "Building the Russian model (downloads ~3GB, takes a while)..."
-  uv run --quiet --with mlx-whisper --with torch --with numpy --with tqdm --with huggingface_hub \
-    python3 "$ANY_SCRIPT" \
+  uv run --quiet "$ANY_SCRIPT" \
       --torch-name-or-path antony66/whisper-large-v3-russian \
       --mlx-path "$RU_DIR" || { echo "Conversion failed. The skill still works on the default model."; return 1; }
   # mlx_whisper looks for weights.safetensors; the converter emits model.safetensors
@@ -87,8 +86,15 @@ elif [ "${1:-}" = "--ru-model" ]; then
 elif [ -r /dev/tty ]; then
   printf '\nBuild the Russian fine-tune? Noticeably better on Russian speech,\nbut downloads ~3GB and takes a while. You can always do it later. [y/N] '
   read -r ans < /dev/tty || ans="n"
-  case "$ans" in [yYдД]*) build_ru_model ;; *) say "Skipped. Using the default model." ;; esac
+  case "$ans" in [yY]*) build_ru_model ;; *) say "Skipped. Using the default model." ;; esac
 fi
+
+# --- pre-warm python deps so the first transcription doesn't stall on downloads ---
+WARM_SCRIPT="${TARGETS[0]}/scripts/transcribe.py"
+[ -f "$WARM_SCRIPT" ] || WARM_SCRIPT="$SRC/scripts/transcribe.py"
+say "Installing Python dependencies (one time, a few GB of wheels)..."
+uv run --quiet "$WARM_SCRIPT" --help >/dev/null \
+  || echo "WARNING: dependency install failed; it will be retried on first use."
 
 cat <<'EOF'
 

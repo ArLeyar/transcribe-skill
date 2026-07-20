@@ -3,6 +3,7 @@ name: transcribe
 description: Transcribe audio from file or microphone. Russian + IT slang optimized. Auto-chunks long files. Local MLX whisper (default, offline, free), OpenAI gpt-4o-mini-transcribe, or local speaker diarization. Use when user asks to transcribe, convert speech to text, or record and transcribe audio. ALSO auto-activate (no "transcribe" word needed) whenever the user sends, pastes, or links a path/URL to an audio file — .m4a (most common), .mp3, .wav, .caf, .ogg, .flac — or a video file (.mp4, .mov, .webm, .mkv); a bare audio path/link means "transcribe this".
 allowed-tools: Read, Bash, Glob
 user_invocable: true
+version: 1.1.0
 ---
 
 # Audio Transcription
@@ -70,7 +71,8 @@ the output and delete those. Prints `Language filter 'es': kept N, dropped M`.
 uv run __SKILL_DIR__/scripts/transcribe.py -e diarize -s 2 <file>
 ```
 
-`HF_TOKEN` is read from `~/.env` automatically (the script loads it; no need to export it).
+`HF_TOKEN` is read from `~/.env` automatically (the script loads it; a token already
+exported in the shell also works and takes precedence).
 Pass `-s N` to pin the speaker count (e.g. `-s 2` for a two-person talk) — this sharply
 stabilizes diarization. Transcription runs on the local whisper model, diarization on
 pyannote 3.1 (MPS). Nothing leaves the machine. Each whisper segment is assigned to the
@@ -234,5 +236,5 @@ mp3 for speed/upload size. Large uncompressed files are re-encoded before proces
 - **ffmpeg**: `brew install ffmpeg` (required for all engines; not a pip package)
 - **Local engines**: Apple Silicon Mac (M1+), 16GB RAM is enough. Models are downloaded
   from HuggingFace on first run and cached in `~/.cache/huggingface/`.
-- **OpenAI engine**: `OPENAI_API_KEY` in `~/.env`
-- **Diarize**: `HF_TOKEN` in `~/.env`, accept pyannote terms on huggingface.co
+- **OpenAI engine**: `OPENAI_API_KEY` in `~/.env` (or exported in the shell)
+- **Diarize**: `HF_TOKEN` in `~/.env` (or exported in the shell), accept pyannote terms on huggingface.co
