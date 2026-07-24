@@ -33,6 +33,22 @@ _RU_DIR = Path.home() / ".cache/whisper-models/whisper-large-v3-russian-mlx"
 RUSSIAN_MLX_MODEL = str(_RU_DIR) if _RU_DIR.exists() else "mlx-community/whisper-large-v3-turbo"
 # General multilingual MLX model — used for non-Russian local transcription.
 TURBO_MLX_MODEL = "mlx-community/whisper-large-v3-turbo"
+# 4-bit turbo: ~0.6GB of weights vs ~1.6GB (turbo fp16) / ~3GB (Russian fine-tune).
+# Default on 8GB Macs, where the fp16 models plus pyannote end up in swap.
+LOW_MEM_MLX_MODEL = "mlx-community/whisper-large-v3-turbo-q4"
+
+
+def total_ram_gb():
+    """Physical RAM in GB. Falls back to 16 if sysconf is unavailable."""
+    try:
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2**30
+    except (ValueError, OSError, AttributeError):
+        return 16.0
+
+
+# TRANSCRIBE_LOW_MEM=1/0 forces the low-memory model choice on or off.
+_forced = os.environ.get("TRANSCRIBE_LOW_MEM")
+LOW_MEM = _forced == "1" if _forced in ("0", "1") else total_ram_gb() < 12
 
 
 def load_env(path=None):
@@ -66,8 +82,16 @@ def normalize_lang(lang):
     return _LANG_ALIASES.get(lang.strip().lower(), lang.strip().lower())
 
 
+def general_model():
+    """Multilingual model for language auto-detect / non-Russian audio."""
+    return LOW_MEM_MLX_MODEL if LOW_MEM else TURBO_MLX_MODEL
+
+
 def local_model_for(lang):
-    """Russian fine-tune for ru, general turbo for everything else."""
+    """Russian fine-tune for ru, general turbo for everything else.
+    On low-RAM machines the quantized turbo replaces both."""
+    if LOW_MEM:
+        return LOW_MEM_MLX_MODEL
     return RUSSIAN_MLX_MODEL if lang == "ru" else TURBO_MLX_MODEL
 
 
@@ -725,7 +749,7 @@ def transcribe_one(audio_path, args, lang):
     # local (default)
     only_lang = normalize_lang(args.only) if args.only else None
     # Auto-detect needs the general multilingual model; the Russian fine-tune skews detection.
-    model = args.model or (TURBO_MLX_MODEL if only_lang else local_model_for(lang))
+    model = args.model or (general_model() if only_lang else local_model_for(lang))
     raw = transcribe_local(audio_path, lang, model, args.prompt,
                            denoise=args.denoise, keep_temp=args.keep_temp,
                            vad=not args.no_vad, only_lang=only_lang,
@@ -797,6 +821,11 @@ def main():
 
     if args.record is not None and args.file:
         p.error("Use either files or --record, not both")
+
+    if LOW_MEM and not args.model and args.engine in ("local", "diarize"):
+        print(f"Low-memory mode ({total_ram_gb():.0f}GB RAM): using {LOW_MEM_MLX_MODEL}. "
+              f"Override with -m, or TRANSCRIBE_LOW_MEM=0 for the full-size models.",
+              file=sys.stderr)
 
     # Determine audio sources
     rec_tmp = None

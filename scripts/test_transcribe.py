@@ -54,9 +54,22 @@ def test_normalize_lang_aliases():
     assert t.normalize_lang("fr") == "fr"  # passthrough
 
 
-def test_local_model_for():
+def test_local_model_for(monkeypatch):
+    monkeypatch.setattr(t, "LOW_MEM", False)
     assert t.local_model_for("ru") == t.RUSSIAN_MLX_MODEL
     assert t.local_model_for("en") == t.TURBO_MLX_MODEL
+    assert t.general_model() == t.TURBO_MLX_MODEL
+
+
+def test_local_model_for_low_mem(monkeypatch):
+    monkeypatch.setattr(t, "LOW_MEM", True)
+    assert t.local_model_for("ru") == t.LOW_MEM_MLX_MODEL
+    assert t.local_model_for("en") == t.LOW_MEM_MLX_MODEL
+    assert t.general_model() == t.LOW_MEM_MLX_MODEL
+
+
+def test_total_ram_gb_is_sane():
+    assert 1 < t.total_ram_gb() < 4096
 
 
 # --- clean_hallucinations -------------------------------------------------

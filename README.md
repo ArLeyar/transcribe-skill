@@ -14,7 +14,8 @@ What it does:
 
 ## Requirements
 
-- Apple Silicon Mac (M1 or newer), 16GB RAM is plenty
+- Apple Silicon Mac (M1 or newer). 16GB RAM is plenty; 8GB works too — on machines with
+  less than 12GB the skill switches to a 4-bit model automatically (see "8GB Macs" below)
 - Codex or Claude Code
 - Homebrew — if you don't have it, grab it at [brew.sh](https://brew.sh)
 
@@ -48,12 +49,31 @@ From there just use plain language — the skill picks the right mode:
 The first run downloads the model (~1.6GB). One time only; after that it works offline.
 Transcription runs roughly 5-10x faster than the recording's length.
 
+## 8GB Macs (MacBook Air and friends)
+
+Nothing to configure. On a machine with less than 12GB of RAM the skill uses
+`whisper-large-v3-turbo-q4` (4-bit, ~0.6GB of weights instead of ~1.6GB) for every language,
+and the installer does not offer the Russian fine-tune — building it loads a ~6GB fp32 model
+and using it costs ~3GB, which means swap on an 8GB machine.
+
+Accuracy drops a little versus the fp16 models, mostly on rare words and punctuation.
+
+Overrides:
+
+- `-m mlx-community/whisper-large-v3-turbo` — force the fp16 model for one run
+- `TRANSCRIBE_LOW_MEM=0` — turn the low-memory choice off entirely (`=1` forces it on)
+- `bash install.sh --ru-model` — build the Russian fine-tune anyway
+
+Speaker diarization works on 8GB too (pyannote adds ~2GB on top of the model), just slower.
+Close the heavy apps first. If a long recording starts thrashing, transcribe without
+diarization, or use `-e openai`.
+
 ## Optional extras
 
 ### Better Russian accuracy
 
-The installer offers to build this for you — say `y` when it asks. This section is only for
-doing it later.
+The installer offers to build this for you — say `y` when it asks (16GB+ machines only).
+This section is only for doing it later.
 
 By default the skill uses the general `whisper-large-v3-turbo`. For Russian there is a much
 better fine-tune, [antony66/whisper-large-v3-russian](https://huggingface.co/antony66/whisper-large-v3-russian)

@@ -89,8 +89,15 @@ build_ru_model() {
   [ -f "$RU_DIR/weights.safetensors" ] && say "Russian model ready: $RU_DIR"
 }
 
+RAM_GB=$(( $(sysctl -n hw.memsize) / 1073741824 ))
+
 if [ -f "$RU_DIR/weights.safetensors" ]; then
   say "Russian model already present, skipping"
+elif [ "$RAM_GB" -lt 12 ] && [ "${1:-}" != "--ru-model" ]; then
+  # Conversion loads the full fp32 torch model (~6GB) and the fine-tune itself needs ~3GB
+  # at runtime — both thrash swap on an 8GB machine. The quantized turbo is used instead.
+  say "${RAM_GB}GB RAM: skipping the Russian fine-tune, the quantized turbo model will be used"
+  say "  (force it anyway with: ./install.sh --ru-model)"
 elif [ "${1:-}" = "--ru-model" ]; then
   build_ru_model
 elif [ -r /dev/tty ]; then

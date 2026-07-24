@@ -3,7 +3,7 @@ name: transcribe
 description: Transcribe audio from file or microphone. Russian + IT slang optimized. Auto-chunks long files. Local MLX whisper (default, offline, free), OpenAI gpt-4o-mini-transcribe, or local speaker diarization. Use when user asks to transcribe, convert speech to text, or record and transcribe audio. ALSO auto-activate (no "transcribe" word needed) whenever the user sends, pastes, or links a path/URL to an audio file — .m4a (most common), .mp3, .wav, .caf, .ogg, .flac — or a video file (.mp4, .mov, .webm, .mkv); a bare audio path/link means "transcribe this".
 allowed-tools: Read, Bash, Glob
 user_invocable: true
-version: 1.2.0
+version: 1.3.0
 ---
 
 # Audio Transcription
@@ -167,12 +167,23 @@ transcribe.py [file ...] [-r SEC] [-e ENGINE] [-l LANG] [--only LANG] [-m MODEL]
 
 The optional Russian model is built locally — see "Optional: better Russian model" in README.md.
 
+### Low-memory machines (8GB Macs)
+
+Under 12GB of physical RAM the script uses `mlx-community/whisper-large-v3-turbo-q4` (4-bit,
+~0.6GB of weights) for **every** language, including Russian, and prints a `Low memory (8GB):`
+note on stderr. The fp16 models plus pyannote do not fit in 8GB without swapping.
+
+- `-m <repo>` overrides the model as usual.
+- `TRANSCRIBE_LOW_MEM=0` disables the switch, `=1` forces it (useful for testing).
+- Diarization still works, just slower; suggest `-e openai` if a long file thrashes.
+
 ### Model overrides
 
 ```bash
 -m gpt-4o-transcribe                          # OpenAI: more accurate (2x cost)
 -m mlx-community/whisper-large-v3-mlx          # local: full v3 (slower than turbo)
 -m mlx-community/whisper-large-v3-turbo        # local: general, fast
+-m mlx-community/whisper-large-v3-turbo-q4     # local: 4-bit, ~0.6GB — for 8GB machines
 ```
 
 ## Output formatting (skill's job, not the script's)
@@ -234,8 +245,9 @@ mp3 for speed/upload size. Large uncompressed files are re-encoded before proces
 - **Python deps**: bundled in the script via PEP 723 — `uv run` installs them on first run
   (mlx-whisper, silero-vad, torch, numpy, soundfile, sounddevice, pyannote.audio, openai).
 - **ffmpeg**: `brew install ffmpeg` (required for all engines; not a pip package)
-- **Local engines**: Apple Silicon Mac (M1+), 16GB RAM is enough. Models are downloaded
-  from HuggingFace on first run and cached in `~/.cache/huggingface/`.
+- **Local engines**: Apple Silicon Mac (M1+). 16GB RAM is enough; 8GB works on the quantized
+  model (see "Low-memory machines"). Models are downloaded from HuggingFace on first run and
+  cached in `~/.cache/huggingface/`.
 - **OpenAI engine**: `OPENAI_API_KEY` in `~/.env` (or exported in the shell)
 - **Diarize**: `HF_TOKEN` in `~/.env` (or exported in the shell), accept pyannote terms on huggingface.co
 
