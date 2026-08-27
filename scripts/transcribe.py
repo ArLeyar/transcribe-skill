@@ -10,6 +10,7 @@
 #     "sounddevice",
 #     "pyannote.audio",
 #     "openai",
+#     "httpx",
 # ]
 # ///
 """Audio transcription: OpenAI API or local MLX models. Auto-chunks long files.
@@ -36,6 +37,53 @@ TURBO_MLX_MODEL = "mlx-community/whisper-large-v3-turbo"
 # 4-bit turbo: ~0.6GB of weights vs ~1.6GB (turbo fp16) / ~3GB (Russian fine-tune).
 # Default on 8GB Macs, where the fp16 models plus pyannote end up in swap.
 LOW_MEM_MLX_MODEL = "mlx-community/whisper-large-v3-turbo-q4"
+
+# Optional cloud engine (-e eleven): ElevenLabs Scribe. Diarization, word timestamps and
+# 5 GB files come from the API itself, so that path skips chunking, VAD and pyannote.
+# OFF unless asked for: this skill runs offline and free by default, and a cloud call is a
+# different deal — your audio leaves the machine and the minutes cost money. Holding an
+# ELEVENLABS_API_KEY for some other tool is not consent to send recordings through it.
+ELEVEN_URL = "https://api.elevenlabs.io/v1/speech-to-text"
+ELEVEN_MODEL = "scribe_v2"
+# ISO-639-1 -> ISO-639-3, which is what Scribe wants. An unlisted code is omitted so the
+# API auto-detects instead of being forced into the wrong language.
+_ISO3 = {"ru": "rus", "en": "eng", "es": "spa", "de": "deu", "fr": "fra", "it": "ita",
+         "pt": "por", "uk": "ukr", "zh": "zho", "ja": "jpn", "ko": "kor", "tr": "tur"}
+
+ENGINES = ("local", "eleven", "openai", "diarize", "diarize-cloud")
+
+
+class ElevenUnavailable(RuntimeError):
+    """The Scribe call could not be made or was refused: no key, network, HTTP status.
+
+    Only this is worth falling back on. A bug in our own response parsing must surface as
+    itself — relabelled as "the cloud is down" it would silently downgrade every run to the
+    local engine and look like an outage nobody can find."""
+
+
+def _eleven_key():
+    """The key as it will actually be sent, or ElevenUnavailable saying why not."""
+    key = (os.environ.get("ELEVENLABS_API_KEY") or "").strip()
+    if not key:
+        raise ElevenUnavailable("ELEVENLABS_API_KEY not set")
+    if not (key.isascii() and key.isprintable()):
+        # httpx puts a rejected header VALUE into its own exception message, and that
+        # message travels to stderr, into the transcript banner, and from there into a
+        # saved file or the clipboard. Refuse before it can be quoted back at us.
+        # isascii() matters as much as isprintable(): a printable non-ASCII character
+        # raises UnicodeEncodeError during header encoding, which is not an HTTPError at
+        # all — it would escape the fallback entirely and print the offending character.
+        raise ElevenUnavailable("ELEVENLABS_API_KEY is not printable ASCII; fix ~/.env")
+    return key
+
+
+def _redact(text, secret):
+    """Never let a key ride out inside an error message.
+
+    The fallback banner is not a log line: it is prepended to the transcript, so it lands
+    in stdout, in the saved .md and on the clipboard. httpx quotes a rejected header value
+    back at you verbatim, which is exactly a key."""
+    return text.replace(secret, "***") if secret else text
 
 
 def total_ram_gb():
@@ -85,6 +133,19 @@ def normalize_lang(lang):
 def general_model():
     """Multilingual model for language auto-detect / non-Russian audio."""
     return LOW_MEM_MLX_MODEL if LOW_MEM else TURBO_MLX_MODEL
+
+
+def resolve_engine(explicit=None, env=None):
+    """Engine actually used: explicit -e wins, then TRANSCRIBE_ENGINE from ~/.env, then local.
+
+    A present ELEVENLABS_API_KEY deliberately does NOT switch anything on. The cloud engine
+    is opt-in twice over — you name it, or you pin it in ~/.env — so nobody's recordings
+    start leaving the machine because a key showed up for an unrelated tool."""
+    env = os.environ if env is None else env
+    if explicit:
+        return explicit
+    pinned = (env.get("TRANSCRIBE_ENGINE") or "").strip()
+    return pinned if pinned in ENGINES else "local"
 
 
 def local_model_for(lang):
@@ -138,8 +199,8 @@ def get_duration(path):
 
 # Video containers (and uncompressed audio) get ffmpeg-extracted to 16kHz mono mp3
 # before transcription — mlx_whisper chokes on raw 300MB+ webm/mp4, the audio track is tiny.
-_FFMPEG_FORCE_EXTS = (".wav", ".caf", ".aiff", ".flac",
-                      ".webm", ".mp4", ".mov", ".mkv", ".m4v", ".avi", ".flv", ".wmv")
+_VIDEO_EXTS = (".webm", ".mp4", ".mov", ".mkv", ".m4v", ".avi", ".flv", ".wmv")
+_FFMPEG_FORCE_EXTS = (".wav", ".caf", ".aiff", ".flac") + _VIDEO_EXTS
 
 
 # Conservative denoise: high/low-pass to cut rumble + hiss, gentle FFT denoise.
@@ -433,6 +494,113 @@ def transcribe_openai(path, lang, model, prompt=None, denoise=False):
     return text
 
 
+def _eleven_words_to_transcript(payload, diarize=True):
+    """Scribe JSON -> (raw, cleaned).
+
+    Word-level speaker ids become the same `**SPEAKER_00:** ...` blocks the local diarize
+    path emits, so everything downstream (formatting, saving) is unchanged. Word texts are
+    concatenated with the API's own spacing entries rather than joined on " " — punctuation
+    arrives as its own token and would otherwise get a space in front."""
+    tokens = [(w.get("speaker_id"), w.get("text", ""), w.get("type") == "spacing")
+              for w in (payload.get("words") or []) if w.get("type") != "audio_event"]
+    speakers = {sid for sid, _, is_sp in tokens if sid and not is_sp}
+    if not diarize or len(speakers) < 2:
+        raw = (payload.get("text") or "").strip()
+        return raw, clean_hallucinations(raw)
+
+    # A word with no speaker_id inherits the run it sits in, and leading unlabelled words
+    # go to the first speaker who does appear. A gap in the API's labelling is a gap, not
+    # a third person in the room.
+    prev = next((sid for sid, _, is_sp in tokens if sid and not is_sp), None)
+    order, runs = {}, []
+    for sid, text, is_sp in tokens:
+        if is_sp:
+            # Spacing before any word would otherwise reserve SPEAKER_00 for whoever the
+            # API happened to tag the whitespace with, pushing every later label along.
+            if runs:
+                runs[-1][1].append(text or " ")
+            continue
+        if sid:
+            prev = sid
+        order.setdefault(prev, f"SPEAKER_{len(order):02d}")
+        spk = order[prev]
+        if not runs or runs[-1][0] != spk:
+            runs.append([spk, [text]])
+        else:
+            runs[-1][1].append(text)
+    groups = [(spk, "".join(parts).strip()) for spk, parts in runs]
+    groups = [g for g in groups if g[1]]
+    return _render_diarized(groups, clean=False), _render_diarized(groups, clean=True)
+
+
+def _eleven_prepare(path, denoise=False):
+    """(path_to_upload, tmpdir_or_None) — ffmpeg pre-pass only when it earns itself.
+
+    Audio goes up untouched (the API takes 5 GB, and re-encoding would only lose detail).
+    A video container does not: uploading 300 MB of mp4 to transcribe its tiny audio track
+    wastes the upload and the API bills by duration either way. --denoise needs the pass
+    regardless of container."""
+    ext = Path(path).suffix.lower()
+    if not denoise and ext not in _VIDEO_EXTS:
+        return path, None
+    tmpdir = tempfile.mkdtemp()
+    out = os.path.join(tmpdir, "audio.mp3")
+    try:
+        subprocess.run(
+            ["ffmpeg", "-i", path, "-vn", *_af(denoise), *_ffmpeg_codec_args(False), out, "-y"],
+            capture_output=True, check=True,
+        )
+    except BaseException:
+        # The caller's finally only sees a tmpdir we managed to return. ffmpeg failing or
+        # Ctrl-C landing here would otherwise orphan it.
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        raise
+    return out, tmpdir
+
+
+def transcribe_eleven(path, lang, speakers=None, model=None, diarize=True, denoise=False,
+                      timeout=1800):
+    """Transcribe via ElevenLabs Scribe. Returns (raw, cleaned).
+
+    The file is sent whole: the API accepts up to 5 GB and returns diarization in the same
+    response, so no chunking, no VAD and no pyannote. Raises ElevenUnavailable when the call
+    itself fails — transcribe_one turns that, and only that, into the local fallback."""
+    import httpx
+
+    key = _eleven_key()
+    data = {"model_id": model or ELEVEN_MODEL, "diarize": "true" if diarize else "false",
+            # We render no audio events, and leaving them on makes the single-speaker
+            # reply (which we pass through as-is) disagree with the diarized one.
+            "tag_audio_events": "false"}
+    iso3 = _ISO3.get(lang)
+    if iso3:
+        data["language_code"] = iso3
+    if speakers and diarize:
+        data["num_speakers"] = str(speakers)
+    print(f"Transcribing via ElevenLabs ({data['model_id']}, "
+          f"diarize={data['diarize']})...", file=sys.stderr)
+    upload, tmpdir = _eleven_prepare(path, denoise)
+    try:
+        with open(upload, "rb") as f:
+            r = httpx.post(ELEVEN_URL, headers={"xi-api-key": key},
+                           files={"file": (Path(upload).name, f)}, data=data, timeout=timeout)
+        r.raise_for_status()
+        try:
+            payload = r.json()
+        except ValueError as e:
+            # A body that isn't JSON — a proxy error page, a truncated response. Caught
+            # narrowly, around this call only: a ValueError from anywhere else in the
+            # block would be our bug, and must not be dressed up as an outage.
+            raise ElevenUnavailable(f"response was not JSON: {e}") from None
+    except httpx.HTTPError as e:
+        raise ElevenUnavailable(_redact(str(e), key)) from None
+    finally:
+        if tmpdir:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+    # Parsing sits outside the try on purpose: a bug here is a bug, not an outage.
+    return _eleven_words_to_transcript(payload, diarize=diarize)
+
+
 def transcribe_local(path, lang, model_repo, prompt=None, denoise=False, keep_temp=False,
                      vad=True, only_lang=None, chunk_sec=300):
     """Transcribe locally via mlx-whisper. Returns RAW text (caller cleans).
@@ -702,6 +870,7 @@ def _diarize_assign_and_format(tokens, annotation):
 
 
 _NO_TOKEN_WARNING = "WARNING: diarization unavailable (no HF_TOKEN), returning plain transcription"
+_ELEVEN_FALLBACK_WARNING = "WARNING: ElevenLabs unavailable ({}), fell back to local transcription"
 
 
 def transcribe_one(audio_path, args, lang):
@@ -731,6 +900,30 @@ def transcribe_one(audio_path, args, lang):
                                    denoise=args.denoise, keep_temp=args.keep_temp,
                                    vad=not args.no_vad)
         return raw, _NO_TOKEN_WARNING + "\n\n" + clean_hallucinations(raw)
+
+    if engine == "eleven":
+        if args.prompt:
+            print("Note: -p (initial prompt) has no effect with -e eleven; the API takes "
+                  "no prompt. Ignoring it.", file=sys.stderr)
+        try:
+            return transcribe_eleven(audio_path, lang, speakers=args.speakers,
+                                     model=args.model, diarize=not args.no_diarize,
+                                     denoise=args.denoise)
+        except ElevenUnavailable as e:
+            if args.no_fallback:
+                print(f"Error: ElevenLabs failed ({e}), --no-fallback set.", file=sys.stderr)
+                sys.exit(1)
+            warn = _ELEVEN_FALLBACK_WARNING.format(e)
+            print(warn, file=sys.stderr)
+            try:
+                raw = transcribe_local(audio_path, lang, local_model_for(lang), args.prompt,
+                                       denoise=args.denoise, keep_temp=args.keep_temp,
+                                       vad=not args.no_vad)
+            except Exception as local_err:  # noqa: BLE001 — report both, never traceback
+                print(f"Error: both engines failed. ElevenLabs: {e}. "
+                      f"Local: {local_err}", file=sys.stderr)
+                sys.exit(1)
+            return raw, warn + "\n\n" + clean_hallucinations(raw)
 
     if engine == "openai":
         if not os.environ.get("OPENAI_API_KEY"):
@@ -779,11 +972,12 @@ def main():
     p.add_argument("file", nargs="*", help="Audio file(s) to transcribe")
     p.add_argument("-r", "--record", type=float, nargs="?", const=0, metavar="SEC",
                    help="Record from mic (seconds, 0=until Ctrl+C)")
-    p.add_argument("-e", "--engine", default="local",
-                   choices=["openai", "local", "diarize", "diarize-cloud"],
-                   help="Engine: local (mlx Russian, default), openai (cloud), "
-                   "diarize (fully local: mlx Russian + pyannote), "
-                   "diarize-cloud (OpenAI transcribe + local pyannote)")
+    p.add_argument("-e", "--engine", default=None, choices=list(ENGINES),
+                   help="Engine: local (mlx Russian, default), "
+                   "eleven (ElevenLabs Scribe, cloud, diarized — opt-in, costs money), "
+                   "openai (cloud), diarize (fully local: mlx Russian + pyannote), "
+                   "diarize-cloud (OpenAI transcribe + local pyannote). "
+                   "Without -e: TRANSCRIBE_ENGINE from ~/.env, else local.")
     p.add_argument("-l", "--lang", default="ru",
                    help="Language: ru/русский (default) | en/английский | any ISO code")
     p.add_argument("--only", metavar="LANG",
@@ -799,8 +993,10 @@ def main():
                    help="Conservative denoise (high/low-pass + afftdn) for noisy/roadside audio")
     p.add_argument("--raw", action="store_true",
                    help="Output raw transcript (skip hallucination cleanup)")
+    p.add_argument("--no-diarize", action="store_true",
+                   help="Engine eleven: skip speaker labels (diarization is on by default)")
     p.add_argument("--no-fallback", action="store_true",
-                   help="For diarize engines: fail instead of falling back to plain transcription")
+                   help="Fail instead of falling back (missing HF_TOKEN, or ElevenLabs unavailable)")
     p.add_argument("--keep-temp", action="store_true",
                    help="Keep temp audio chunks and print their path (debug)")
     p.add_argument("--no-vad", action="store_true",
@@ -814,6 +1010,8 @@ def main():
     args = p.parse_args()
 
     load_env()
+    # Resolution needs ~/.env loaded first: TRANSCRIBE_ENGINE lives there.
+    args.engine = resolve_engine(args.engine)
     lang = normalize_lang(args.lang)
 
     if args.only and args.engine != "local":

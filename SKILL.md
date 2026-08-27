@@ -1,6 +1,6 @@
 ---
 name: transcribe
-description: Transcribe audio from file or microphone. Russian + IT slang optimized. Auto-chunks long files. Local MLX whisper (default, offline, free), OpenAI gpt-4o-mini-transcribe, or local speaker diarization. Use when user asks to transcribe, convert speech to text, or record and transcribe audio. ALSO auto-activate (no "transcribe" word needed) whenever the user sends, pastes, or links a path/URL to an audio file — .m4a (most common), .mp3, .wav, .caf, .ogg, .flac — or a video file (.mp4, .mov, .webm, .mkv); a bare audio path/link means "transcribe this".
+description: Transcribe audio from file or microphone. Russian + IT slang optimized. Auto-chunks long files. Local MLX whisper (default, offline, free), optional ElevenLabs Scribe or OpenAI cloud engines, or local speaker diarization. Use when user asks to transcribe, convert speech to text, or record and transcribe audio. ALSO auto-activate (no "transcribe" word needed) whenever the user sends, pastes, or links a path/URL to an audio file — .m4a (most common), .mp3, .wav, .caf, .ogg, .flac — or a video file (.mp4, .mov, .webm, .mkv); a bare audio path/link means "transcribe this".
 allowed-tools: Read, Bash, Glob
 user_invocable: true
 version: 1.3.0
@@ -82,6 +82,24 @@ are smoothed out.
 If `HF_TOKEN` is missing, diarize falls back to a plain transcription with a `WARNING:`
 banner at the top of the output (use `--no-fallback` to hard-fail instead).
 
+### ElevenLabs Scribe (cloud, diarized — opt-in, audio leaves machine, costs money)
+
+```bash
+uv run __SKILL_DIR__/scripts/transcribe.py -e eleven -s 2 <file>
+```
+
+Needs `ELEVENLABS_API_KEY` in `~/.env`. Speaker labels come back in the same response, so
+this path skips chunking, VAD and pyannote entirely — one request, files up to 5 GB, about
+$0.22 per hour of audio. `-s N` pins the speaker count, `--no-diarize` drops the labels,
+`--denoise` still works (ffmpeg runs before the upload). `-p` is the one flag it cannot
+honour — the API takes no prompt; passing it prints a note and continues. A video file gets
+its audio track extracted first, so a 300 MB screen recording uploads as a few MB of mp3.
+
+**Off unless you ask for it.** Holding the key changes nothing on its own — name the engine
+with `-e eleven`, or pin `TRANSCRIBE_ENGINE=eleven` in `~/.env` to make it the default. If
+the call fails, transcription falls back to the local engine with a `WARNING:` banner rather
+than dying; `--no-fallback` turns that into an error instead.
+
 ### OpenAI cloud (audio leaves machine, costs money)
 
 ```bash
@@ -131,7 +149,8 @@ transcribe.py [file ...] [-r SEC] [-e ENGINE] [-l LANG] [--only LANG] [-m MODEL]
 
   file            Audio file(s) (.wav, .mp3, .m4a, .caf, .ogg, .flac) or video (.mp4, .mov, ...)
   -r, --record    Record from mic (SEC=seconds, omit=until Ctrl+C)
-  -e, --engine    local (default) | openai | diarize | diarize-cloud
+  -e, --engine    local (default) | eleven | openai | diarize | diarize-cloud
+                  (without -e: TRANSCRIBE_ENGINE from ~/.env, else local)
   -l, --lang      ru/русский (default) | en/английский | any ISO code
   --only          Mixed audio: auto-detect per chunk, keep ONLY this language (e.g. es). Local only.
   -m, --model     Model override
@@ -140,7 +159,8 @@ transcribe.py [file ...] [-r SEC] [-e ENGINE] [-l LANG] [--only LANG] [-m MODEL]
   --denoise       Conservative denoise (high/low-pass + afftdn) for noisy/roadside audio
   --raw           Output raw transcript (skip hallucination cleanup)
   --no-vad        Disable VAD chunking, use fixed-time 5-min chunks
-  --no-fallback   Diarize: fail instead of falling back to plain transcription on missing token
+  --no-diarize    Engine eleven: skip speaker labels (diarization is on by default there)
+  --no-fallback   Fail instead of falling back (missing HF_TOKEN, or ElevenLabs unavailable)
   --keep-temp     Keep temp audio chunks and print their path (debug)
   --merge         Merge multiple files recorded back-to-back into one session each
   --merge-gap     Max silence (sec) between recordings to count as one session (default 300)
@@ -153,6 +173,7 @@ transcribe.py [file ...] [-r SEC] [-e ENGINE] [-l LANG] [--only LANG] [-m MODEL]
 | Engine | Transcription | Diarization | Local? | Cost | Notes |
 |--------|---------------|-------------|--------|------|-------|
 | `local` (default) | mlx whisper | — | ✅ fully | Free | offline, no key needed |
+| `eleven` | ElevenLabs Scribe v2 | ✅ built in (≤32 speakers) | ❌ cloud | $0.22/hr | opt-in; best accuracy, one request, no chunking |
 | `openai` | gpt-4o-mini-transcribe | — | ❌ cloud | $0.003/min | fast, auto-chunk, parallel |
 | `diarize` | mlx whisper | pyannote 3.1 (local) | ✅ fully | Free | best local who-said-what |
 | `diarize-cloud` | OpenAI whisper-1 | pyannote 3.1 (local) | ❌ hybrid | $ | legacy; faster on long files |
@@ -243,7 +264,8 @@ mp3 for speed/upload size. Large uncompressed files are re-encoded before proces
 ## Requirements
 
 - **Python deps**: bundled in the script via PEP 723 — `uv run` installs them on first run
-  (mlx-whisper, silero-vad, torch, numpy, soundfile, sounddevice, pyannote.audio, openai).
+  (mlx-whisper, silero-vad, torch, numpy, soundfile, sounddevice, pyannote.audio, openai,
+  httpx).
 - **ffmpeg**: `brew install ffmpeg` (required for all engines; not a pip package)
 - **Local engines**: Apple Silicon Mac (M1+). 16GB RAM is enough; 8GB works on the quantized
   model (see "Low-memory machines"). Models are downloaded from HuggingFace on first run and
