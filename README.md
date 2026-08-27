@@ -108,6 +108,20 @@ Needs a free HuggingFace token:
 
 Without a token diarization simply stays off and plain transcription keeps working.
 
+### ElevenLabs Scribe (the accurate cloud option)
+
+The most accurate engine here, and the only one that labels speakers without a second
+model: diarization, word timestamps and files up to 5 GB come back in one request, so no
+chunking and no pyannote. About $0.22 per hour of audio.
+
+Put `ELEVENLABS_API_KEY=sk_...` in `~/.env` and ask for "transcribe with eleven" (or pass
+`-e eleven`). To make it your default, add `TRANSCRIBE_ENGINE=eleven` to the same file.
+
+**It stays off until you do one of those two things.** The key alone changes nothing —
+this skill is offline by default, and sending your recordings to a paid API is a decision
+you make, not one a stray environment variable makes for you. When the call fails,
+transcription falls back to the local model instead of dying.
+
 ### OpenAI cloud engine
 
 Faster on long files, but the audio leaves your machine and it costs money ($0.003/min).

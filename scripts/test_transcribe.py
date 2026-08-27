@@ -271,3 +271,157 @@ def test_file_start_time_falls_back_to_mtime(tmp_path, monkeypatch):
                         lambda *a, **k: type("R", (), {"stdout": ""})())
     ts = t._file_start_time(str(f))
     assert isinstance(ts, float) and ts > 0
+
+
+# --- resolve_engine: the cloud engine stays off unless asked for ---------
+
+def test_resolve_engine_defaults_to_local():
+    assert t.resolve_engine(None, env={}) == "local"
+
+
+def test_resolve_engine_key_alone_does_not_enable_cloud():
+    """Having a key for some other tool is not consent to upload recordings."""
+    assert t.resolve_engine(None, env={"ELEVENLABS_API_KEY": "k"}) == "local"
+
+
+def test_resolve_engine_explicit_and_pinned():
+    assert t.resolve_engine("eleven", env={}) == "eleven"
+    assert t.resolve_engine(None, env={"TRANSCRIBE_ENGINE": "eleven"}) == "eleven"
+
+
+def test_resolve_engine_ignores_unknown_pin():
+    assert t.resolve_engine(None, env={"TRANSCRIBE_ENGINE": "scribe"}) == "local"
+
+
+# --- Scribe response -> transcript ---------------------------------------
+
+def _words(*triples):
+    return [{"text": txt, "type": typ, "speaker_id": sid} for txt, typ, sid in triples]
+
+
+def test_eleven_two_speakers_render_as_blocks():
+    payload = {"text": "ignored", "words": _words(
+        ("Привет", "word", "speaker_1"), (",", "word", "speaker_1"),
+        (" ", "spacing", "speaker_1"), ("как", "word", "speaker_1"),
+        (" ", "spacing", "speaker_1"), ("дела", "word", "speaker_1"),
+        ("Нормально", "word", "speaker_2"),
+    )}
+    raw, cleaned = t._eleven_words_to_transcript(payload)
+    assert raw == "**SPEAKER_00:** Привет, как дела\n\n**SPEAKER_01:** Нормально"
+    assert cleaned == raw
+
+
+def test_eleven_single_speaker_returns_plain_text():
+    payload = {"text": "  Один голос  ", "words": _words(("Один", "word", "speaker_1"))}
+    assert t._eleven_words_to_transcript(payload)[0] == "Один голос"
+
+
+def test_eleven_diarize_off_returns_plain_text():
+    payload = {"text": "Два голоса", "words": _words(
+        ("Два", "word", "speaker_1"), ("голоса", "word", "speaker_2"))}
+    assert t._eleven_words_to_transcript(payload, diarize=False)[0] == "Два голоса"
+
+
+def test_eleven_payload_without_words_key():
+    assert t._eleven_words_to_transcript({"text": "только текст"})[0] == "только текст"
+
+
+def test_eleven_drops_audio_events():
+    payload = {"text": "", "words": _words(
+        ("Да", "word", "speaker_1"), ("(laughter)", "audio_event", "speaker_1"),
+        ("Нет", "word", "speaker_2"))}
+    raw, _ = t._eleven_words_to_transcript(payload)
+    assert "laughter" not in raw and raw.startswith("**SPEAKER_00:** Да")
+
+
+# --- fallback when the cloud is unavailable ------------------------------
+
+def _args(**over):
+    base = dict(engine="eleven", model=None, prompt=None, speakers=None, denoise=False,
+                keep_temp=False, no_vad=False, no_fallback=False, no_diarize=False, only=None)
+    base.update(over)
+    return t.argparse.Namespace(**base)
+
+
+def test_eleven_failure_falls_back_with_banner(monkeypatch):
+    monkeypatch.setattr(t, "transcribe_eleven",
+                        lambda *a, **k: (_ for _ in ()).throw(t.ElevenUnavailable("no key")))
+    monkeypatch.setattr(t, "transcribe_local", lambda *a, **k: "локальный текст")
+    raw, cleaned = t.transcribe_one("x.m4a", _args(), "ru")
+    assert raw == "локальный текст"
+    assert cleaned.startswith("WARNING: ElevenLabs unavailable")
+
+
+def test_eleven_failure_with_no_fallback_exits(monkeypatch):
+    monkeypatch.setattr(t, "transcribe_eleven",
+                        lambda *a, **k: (_ for _ in ()).throw(t.ElevenUnavailable("nope")))
+    import pytest
+    with pytest.raises(SystemExit) as exc:
+        t.transcribe_one("x.m4a", _args(no_fallback=True), "ru")
+    assert exc.value.code == 1
+
+
+def test_eleven_both_engines_failing_exits_instead_of_raising(monkeypatch):
+    monkeypatch.setattr(t, "transcribe_eleven",
+                        lambda *a, **k: (_ for _ in ()).throw(t.ElevenUnavailable("no net")))
+
+    def local_dead(*a, **k):
+        raise OSError("model cache missing")
+    monkeypatch.setattr(t, "transcribe_local", local_dead)
+    import pytest
+    with pytest.raises(SystemExit) as exc:
+        t.transcribe_one("x.m4a", _args(), "ru")
+    assert exc.value.code == 1
+
+
+def test_eleven_parsing_bug_is_not_disguised_as_an_outage(monkeypatch):
+    """A defect in our own response handling must surface, not fall back silently."""
+    def bug(*a, **k):
+        raise TypeError("bad call signature")
+    monkeypatch.setattr(t, "transcribe_eleven", bug)
+    monkeypatch.setattr(t, "transcribe_local", lambda *a, **k: "should not be reached")
+    import pytest
+    with pytest.raises(TypeError):
+        t.transcribe_one("x.m4a", _args(), "ru")
+
+
+def test_eleven_prompt_is_reported_as_ignored(monkeypatch, capsys):
+    monkeypatch.setattr(t, "transcribe_eleven", lambda *a, **k: ("r", "c"))
+    t.transcribe_one("a.m4a", _args(prompt="Kubernetes, gRPC"), "ru")
+    assert "-p (initial prompt) has no effect" in capsys.readouterr().err
+
+
+def test_eleven_flags_are_forwarded(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(t, "transcribe_eleven",
+                        lambda *a, **k: (seen.update(k) or ("r", "c")))
+    t.transcribe_one("a.m4a", _args(speakers=2, denoise=True, no_diarize=True), "ru")
+    assert seen["speakers"] == 2 and seen["denoise"] is True and seen["diarize"] is False
+
+
+# --- _eleven_prepare: upload the audio track, not the video container ----
+
+def test_eleven_prepare_passes_audio_through(tmp_path):
+    f = tmp_path / "voice.m4a"
+    f.write_bytes(b"x")
+    assert t._eleven_prepare(str(f)) == (str(f), None)
+
+
+def test_eleven_prepare_extracts_video(tmp_path, monkeypatch):
+    f = tmp_path / "call.mp4"
+    f.write_bytes(b"x")
+    calls = []
+    monkeypatch.setattr(t.subprocess, "run", lambda cmd, **k: calls.append(cmd))
+    out, tmpdir = t._eleven_prepare(str(f))
+    assert out.endswith("audio.mp3") and tmpdir and "-vn" in calls[0]
+    t.shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_eleven_prepare_denoise_forces_pass_on_plain_audio(tmp_path, monkeypatch):
+    f = tmp_path / "voice.m4a"
+    f.write_bytes(b"x")
+    calls = []
+    monkeypatch.setattr(t.subprocess, "run", lambda cmd, **k: calls.append(cmd))
+    out, tmpdir = t._eleven_prepare(str(f), denoise=True)
+    assert out != str(f) and "-af" in calls[0]
+    t.shutil.rmtree(tmpdir, ignore_errors=True)
