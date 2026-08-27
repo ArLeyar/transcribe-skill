@@ -1,6 +1,6 @@
 """Unit tests for transcribe.py pure functions + ffmpeg arg construction.
 
-Run: uv run --with pytest pytest skills/transcribe/scripts/test_transcribe.py
+Run: uv run --with pytest --with httpx pytest scripts/test_transcribe.py
 mlx/pyannote/openai paths are integration-tested by running on real audio, not here.
 """
 import sys
@@ -388,7 +388,71 @@ def test_eleven_rejects_a_key_with_control_characters(monkeypatch):
     import pytest
     with pytest.raises(t.ElevenUnavailable) as exc:
         t.transcribe_eleven("f.m4a", "ru")
-    assert "control characters" in str(exc.value) and "sk_bad" not in str(exc.value)
+    assert "printable ASCII" in str(exc.value) and "sk_bad" not in str(exc.value)
+
+
+def test_eleven_rejects_a_non_ascii_key(monkeypatch):
+    """Printable but non-ASCII raises UnicodeEncodeError inside httpx — not an HTTPError,
+    so it would escape the fallback entirely and print the offending character."""
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "sk_é")
+    import pytest
+    with pytest.raises(t.ElevenUnavailable) as exc:
+        t.transcribe_eleven("f.m4a", "ru")
+    assert "printable ASCII" in str(exc.value)
+
+
+# --- the request we actually send ----------------------------------------
+
+class _FakeResponse:
+    def __init__(self, payload=None, bad_json=False):
+        self._payload, self._bad = payload, bad_json
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        if self._bad:
+            raise ValueError("Expecting value: line 1 column 1 (char 0)")
+        return self._payload
+
+
+def _capture_post(monkeypatch, response):
+    """Stand in for httpx.post; returns the dict the request kwargs land in."""
+    import httpx
+    seen = {}
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "sk_test")
+    monkeypatch.setattr(t, "_eleven_prepare", lambda *a, **k: ("f.m4a", None))
+    monkeypatch.setattr("builtins.open", lambda *a, **k: __import__("io").BytesIO(b"x"))
+    monkeypatch.setattr(httpx, "post",
+                        lambda url, **kw: (seen.update(url=url, **kw), response)[1])
+    return seen
+
+
+def test_eleven_request_shape(monkeypatch):
+    seen = _capture_post(monkeypatch, _FakeResponse({"text": "ок", "words": []}))
+    t.transcribe_eleven("f.m4a", "ru", speakers=3)
+    data = seen["data"]
+    # without this the single-speaker passthrough keeps "(laughter)" and the diarized
+    # path strips it — same audio, different output depending on speaker count
+    assert data["tag_audio_events"] == "false"
+    assert data["model_id"] == "scribe_v2"
+    assert data["diarize"] == "true" and data["num_speakers"] == "3"
+    assert data["language_code"] == "rus"
+    assert seen["headers"]["xi-api-key"] == "sk_test"
+
+
+def test_eleven_num_speakers_dropped_when_diarize_off(monkeypatch):
+    seen = _capture_post(monkeypatch, _FakeResponse({"text": "ок", "words": []}))
+    t.transcribe_eleven("f.m4a", "ru", speakers=3, diarize=False)
+    assert "num_speakers" not in seen["data"] and seen["data"]["diarize"] == "false"
+
+
+def test_eleven_non_json_body_is_an_outage_not_a_crash(monkeypatch):
+    _capture_post(monkeypatch, _FakeResponse(bad_json=True))
+    import pytest
+    with pytest.raises(t.ElevenUnavailable) as exc:
+        t.transcribe_eleven("f.m4a", "ru")
+    assert "not JSON" in str(exc.value)
 
 
 def test_eleven_prepare_cleans_up_when_ffmpeg_fails(tmp_path, monkeypatch):

@@ -554,11 +554,14 @@ def transcribe_eleven(path, lang, speakers=None, model=None, diarize=True, denoi
     key = (os.environ.get("ELEVENLABS_API_KEY") or "").strip()
     if not key:
         raise ElevenUnavailable("ELEVENLABS_API_KEY not set")
-    if not key.isprintable():
+    if not (key.isascii() and key.isprintable()):
         # httpx puts a rejected header VALUE into its own exception message, and that
         # message travels to stderr, into the transcript banner, and from there into a
         # saved file or the clipboard. Refuse before it can be quoted back at us.
-        raise ElevenUnavailable("ELEVENLABS_API_KEY contains control characters; fix ~/.env")
+        # isascii() matters as much as isprintable(): a printable non-ASCII character
+        # raises UnicodeEncodeError during header encoding, which is not an HTTPError at
+        # all — it would escape the fallback entirely and print the offending character.
+        raise ElevenUnavailable("ELEVENLABS_API_KEY is not printable ASCII; fix ~/.env")
     data = {"model_id": model or ELEVEN_MODEL, "diarize": "true" if diarize else "false",
             # We render no audio events, and leaving them on makes the single-speaker
             # reply (which we pass through as-is) disagree with the diarized one.
