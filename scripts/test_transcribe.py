@@ -334,6 +334,80 @@ def test_eleven_drops_audio_events():
     assert "laughter" not in raw and raw.startswith("**SPEAKER_00:** Да")
 
 
+def test_eleven_unlabelled_word_joins_the_current_speaker():
+    """A gap in the API's labelling is a gap, not a third person in the room."""
+    payload = {"text": "", "words": _words(
+        ("Раз", "word", "speaker_1"), (" ", "spacing", "speaker_1"),
+        ("два", "word", None), ("три", "word", "speaker_2"))}
+    raw, _ = t._eleven_words_to_transcript(payload)
+    assert raw == "**SPEAKER_00:** Раз два\n\n**SPEAKER_01:** три"
+
+
+def test_eleven_leading_spacing_does_not_steal_speaker_00():
+    payload = {"text": "", "words": _words(
+        (" ", "spacing", "speaker_9"), ("Первый", "word", "speaker_1"),
+        ("Второй", "word", "speaker_2"))}
+    raw, _ = t._eleven_words_to_transcript(payload)
+    assert raw.startswith("**SPEAKER_00:** Первый")
+
+
+def test_eleven_unlabelled_words_before_any_label_go_to_the_first_speaker():
+    payload = {"text": "", "words": _words(
+        ("Начало", "word", None), (" ", "spacing", None),
+        ("речи", "word", "speaker_1"), ("ответ", "word", "speaker_2"))}
+    raw, _ = t._eleven_words_to_transcript(payload)
+    assert raw == "**SPEAKER_00:** Начало речи\n\n**SPEAKER_01:** ответ"
+
+
+# --- the key never rides out in an error message -------------------------
+
+def test_redact_removes_the_key():
+    assert t._redact("Illegal header value b'sk_secret'", "sk_secret") == \
+        "Illegal header value b'***'"
+
+
+def test_eleven_http_error_text_carries_no_key(monkeypatch):
+    """httpx quotes a rejected header value back verbatim, and that text is prepended to
+    the transcript — so it reaches stdout, the saved file and the clipboard."""
+    import httpx
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "sk_supersecret")
+    monkeypatch.setattr(t, "_eleven_prepare", lambda *a, **k: ("f.m4a", None))
+    monkeypatch.setattr("builtins.open", lambda *a, **k: __import__("io").BytesIO(b"x"))
+
+    def raise_with_key(*a, **k):
+        raise httpx.LocalProtocolError("Illegal header value b'sk_supersecret'")
+    monkeypatch.setattr(httpx, "post", raise_with_key)
+    import pytest
+    with pytest.raises(t.ElevenUnavailable) as exc:
+        t.transcribe_eleven("f.m4a", "ru")
+    assert "sk_supersecret" not in str(exc.value)
+
+
+def test_eleven_rejects_a_key_with_control_characters(monkeypatch):
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "sk_bad\x01key")
+    import pytest
+    with pytest.raises(t.ElevenUnavailable) as exc:
+        t.transcribe_eleven("f.m4a", "ru")
+    assert "control characters" in str(exc.value) and "sk_bad" not in str(exc.value)
+
+
+def test_eleven_prepare_cleans_up_when_ffmpeg_fails(tmp_path, monkeypatch):
+    f = tmp_path / "call.mp4"
+    f.write_bytes(b"x")
+    made = []
+    real_mkdtemp = t.tempfile.mkdtemp
+    monkeypatch.setattr(t.tempfile, "mkdtemp",
+                        lambda *a, **k: made.append(real_mkdtemp()) or made[-1])
+
+    def ffmpeg_dies(*a, **k):
+        raise t.subprocess.CalledProcessError(1, "ffmpeg")
+    monkeypatch.setattr(t.subprocess, "run", ffmpeg_dies)
+    import pytest
+    with pytest.raises(t.subprocess.CalledProcessError):
+        t._eleven_prepare(str(f))
+    assert made and not t.os.path.exists(made[0])
+
+
 # --- fallback when the cloud is unavailable ------------------------------
 
 def _args(**over):

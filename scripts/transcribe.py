@@ -61,6 +61,15 @@ class ElevenUnavailable(RuntimeError):
     local engine and look like an outage nobody can find."""
 
 
+def _redact(text, secret):
+    """Never let a key ride out inside an error message.
+
+    The fallback banner is not a log line: it is prepended to the transcript, so it lands
+    in stdout, in the saved .md and on the clipboard. httpx quotes a rejected header value
+    back at you verbatim, which is exactly a key."""
+    return text.replace(secret, "***") if secret else text
+
+
 def total_ram_gb():
     """Physical RAM in GB. Falls back to 16 if sysconf is unavailable."""
     try:
@@ -476,26 +485,33 @@ def _eleven_words_to_transcript(payload, diarize=True):
     path emits, so everything downstream (formatting, saving) is unchanged. Word texts are
     concatenated with the API's own spacing entries rather than joined on " " — punctuation
     arrives as its own token and would otherwise get a space in front."""
-    words = payload.get("words") or []
-    speakers = {w.get("speaker_id") for w in words if w.get("speaker_id")}
+    tokens = [(w.get("speaker_id"), w.get("text", ""), w.get("type") == "spacing")
+              for w in (payload.get("words") or []) if w.get("type") != "audio_event"]
+    speakers = {sid for sid, _, is_sp in tokens if sid and not is_sp}
     if not diarize or len(speakers) < 2:
         raw = (payload.get("text") or "").strip()
         return raw, clean_hallucinations(raw)
 
+    # A word with no speaker_id inherits the run it sits in, and leading unlabelled words
+    # go to the first speaker who does appear. A gap in the API's labelling is a gap, not
+    # a third person in the room.
+    prev = next((sid for sid, _, is_sp in tokens if sid and not is_sp), None)
     order, runs = {}, []
-    for w in words:
-        if w.get("type") == "audio_event":
+    for sid, text, is_sp in tokens:
+        if is_sp:
+            # Spacing before any word would otherwise reserve SPEAKER_00 for whoever the
+            # API happened to tag the whitespace with, pushing every later label along.
+            if runs:
+                runs[-1][1].append(text or " ")
             continue
-        if w.get("type") == "spacing" and runs:
-            runs[-1][1].append(w.get("text", " "))
-            continue
-        sid = w.get("speaker_id") or "?"
-        order.setdefault(sid, f"SPEAKER_{len(order):02d}")
-        spk = order[sid]
+        if sid:
+            prev = sid
+        order.setdefault(prev, f"SPEAKER_{len(order):02d}")
+        spk = order[prev]
         if not runs or runs[-1][0] != spk:
-            runs.append([spk, [w.get("text", "")]])
+            runs.append([spk, [text]])
         else:
-            runs[-1][1].append(w.get("text", ""))
+            runs[-1][1].append(text)
     groups = [(spk, "".join(parts).strip()) for spk, parts in runs]
     groups = [g for g in groups if g[1]]
     return _render_diarized(groups, clean=False), _render_diarized(groups, clean=True)
@@ -513,10 +529,16 @@ def _eleven_prepare(path, denoise=False):
         return path, None
     tmpdir = tempfile.mkdtemp()
     out = os.path.join(tmpdir, "audio.mp3")
-    subprocess.run(
-        ["ffmpeg", "-i", path, "-vn", *_af(denoise), *_ffmpeg_codec_args(False), out, "-y"],
-        capture_output=True, check=True,
-    )
+    try:
+        subprocess.run(
+            ["ffmpeg", "-i", path, "-vn", *_af(denoise), *_ffmpeg_codec_args(False), out, "-y"],
+            capture_output=True, check=True,
+        )
+    except BaseException:
+        # The caller's finally only sees a tmpdir we managed to return. ffmpeg failing or
+        # Ctrl-C landing here would otherwise orphan it.
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        raise
     return out, tmpdir
 
 
@@ -529,10 +551,18 @@ def transcribe_eleven(path, lang, speakers=None, model=None, diarize=True, denoi
     itself fails — transcribe_one turns that, and only that, into the local fallback."""
     import httpx
 
-    key = os.environ.get("ELEVENLABS_API_KEY")
+    key = (os.environ.get("ELEVENLABS_API_KEY") or "").strip()
     if not key:
         raise ElevenUnavailable("ELEVENLABS_API_KEY not set")
-    data = {"model_id": model or ELEVEN_MODEL, "diarize": "true" if diarize else "false"}
+    if not key.isprintable():
+        # httpx puts a rejected header VALUE into its own exception message, and that
+        # message travels to stderr, into the transcript banner, and from there into a
+        # saved file or the clipboard. Refuse before it can be quoted back at us.
+        raise ElevenUnavailable("ELEVENLABS_API_KEY contains control characters; fix ~/.env")
+    data = {"model_id": model or ELEVEN_MODEL, "diarize": "true" if diarize else "false",
+            # We render no audio events, and leaving them on makes the single-speaker
+            # reply (which we pass through as-is) disagree with the diarized one.
+            "tag_audio_events": "false"}
     iso3 = _ISO3.get(lang)
     if iso3:
         data["language_code"] = iso3
@@ -546,11 +576,15 @@ def transcribe_eleven(path, lang, speakers=None, model=None, diarize=True, denoi
             r = httpx.post(ELEVEN_URL, headers={"xi-api-key": key},
                            files={"file": (Path(upload).name, f)}, data=data, timeout=timeout)
         r.raise_for_status()
-        payload = r.json()
-    except (httpx.HTTPError, ValueError) as e:
-        # ValueError covers a body that isn't JSON — a proxy error page, a truncated
-        # response. That is the network lying to us, not our parsing being wrong.
-        raise ElevenUnavailable(str(e)) from e
+        try:
+            payload = r.json()
+        except ValueError as e:
+            # A body that isn't JSON — a proxy error page, a truncated response. Caught
+            # narrowly, around this call only: a ValueError from anywhere else in the
+            # block would be our bug, and must not be dressed up as an outage.
+            raise ElevenUnavailable(f"response was not JSON: {e}") from None
+    except httpx.HTTPError as e:
+        raise ElevenUnavailable(_redact(str(e), key)) from None
     finally:
         if tmpdir:
             shutil.rmtree(tmpdir, ignore_errors=True)
