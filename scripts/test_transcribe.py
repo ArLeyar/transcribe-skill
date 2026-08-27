@@ -431,6 +431,11 @@ def _capture_post(monkeypatch, response):
 def test_eleven_request_shape(monkeypatch):
     seen = _capture_post(monkeypatch, _FakeResponse({"text": "ок", "words": []}))
     t.transcribe_eleven("f.m4a", "ru", speakers=3)
+    assert seen["url"] == t.ELEVEN_URL
+    assert seen["timeout"] == 1800
+    name, handle = seen["files"]["file"]
+    assert name == "f.m4a"
+    assert handle.closed, "the upload handle must be closed by the with-block"
     data = seen["data"]
     # without this the single-speaker passthrough keeps "(laughter)" and the diarized
     # path strips it — same audio, different output depending on speaker count
