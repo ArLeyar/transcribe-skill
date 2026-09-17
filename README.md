@@ -1,4 +1,21 @@
-# transcribe — audio to text, locally
+# transcribe — moved to ArLeyar/skills
+
+**This repository is archived.** The skill now lives in
+[ArLeyar/skills](https://github.com/ArLeyar/skills), under
+[`skills/transcribe`](https://github.com/ArLeyar/skills/tree/main/skills/transcribe), alongside the
+other skills for Claude Code and Codex. Install from there:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ArLeyar/skills/main/skills/transcribe/install.sh | bash
+```
+
+Running that over an existing install updates it in place, so there is nothing to uninstall first.
+The skill itself is unchanged; its documentation moved with it. Everything below describes the
+last version published here.
+
+---
+
+## transcribe — audio to text, locally
 
 A skill for **Codex** and **Claude Code** that turns audio and video recordings into text
 right on your Mac: offline, free, and nothing ever leaves your machine. Tuned for Russian

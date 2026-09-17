@@ -59,7 +59,9 @@ for DEST in "${TARGETS[@]}"; do
     continue
   fi
   # Re-running is how you update: report old -> new (or "already latest") before overwriting.
-  OLD_VER="$(sed -n 's/^version: //p' "$DEST/SKILL.md" 2>/dev/null)"
+  # || true: on a clean install SKILL.md isn't there yet, sed exits non-zero and `set -e`
+  # would kill the installer right here (silently — 2>/dev/null hides the text, not the code).
+  OLD_VER="$(sed -n 's/^version: //p' "$DEST/SKILL.md" 2>/dev/null || true)"
   if [ -z "$OLD_VER" ]; then
     say "Installing transcribe v$NEW_VER -> $DEST"
   elif [ "$OLD_VER" = "$NEW_VER" ]; then
